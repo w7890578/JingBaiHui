@@ -1,4 +1,5 @@
-﻿using System;
+﻿using JingBaiHui.Common.Models;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Configuration;
@@ -69,30 +70,63 @@ namespace JingBaiHui.Common
         {
             int start = (pageIndex - 1) * pageSize + 1;
             int end = pageIndex * pageSize;
-            cmdText = string.Format(@"
+            cmdText = $@"
 SELECT *
 FROM
   (SELECT ROW_NUMBER() OVER(
-                            ORDER BY {0}) AS aaaaa ,
+                            ORDER BY {(string.IsNullOrEmpty(order) ? OrderBy : order)}) AS aaaaa ,
           *
-   FROM ({1})as temp) as temp
-WHERE temp.aaaaa BETWEEN {2} AND {3}", string.IsNullOrEmpty(order) ? OrderBy : order, cmdText, start, end);
+   FROM ({cmdText})as temp) as temp
+WHERE temp.aaaaa BETWEEN {start} AND {end}";
             DbCommand cmd = CreateCommand(CommandType.Text, cmdText, parameters);
             return GetList<T>(converter, cmd);
         }
 
-        private DbCommand CreateCommand(CommandType commandType, String commandText, Dictionary<string, object> parameters = null)
+        //private DbCommand CreateCommand(CommandType commandType, String commandText, Dictionary<string, object> parameters = null)
+        //{
+        //    DbCommand cmd = CreateConnection().CreateCommand();
+        //    cmd.CommandType = commandType;
+        //    cmd.CommandText = commandText;
+        //    if (parameters != null)
+        //    {
+        //        foreach (KeyValuePair<string, object> item in parameters)
+        //        {
+        //            DbParameter dbParameter = cmd.CreateParameter();
+        //            dbParameter.ParameterName = item.Key;
+        //            dbParameter.Value = item.Value ?? DBNull.Value;
+
+        //            cmd.Parameters.Add(dbParameter);
+        //        }
+        //    }
+        //    return cmd;
+        //}
+
+        private DbCommand CreateCommand(CommandType commandType, String commandText, Dictionary<string, object> dicParameters = null, List<DbParameterInfo> listParameters = null)
         {
             DbCommand cmd = CreateConnection().CreateCommand();
             cmd.CommandType = commandType;
             cmd.CommandText = commandText;
-            if (parameters != null)
+            if (dicParameters != null)
             {
-                foreach (KeyValuePair<string, object> item in parameters)
+                foreach (KeyValuePair<string, object> item in dicParameters)
                 {
                     DbParameter dbParameter = cmd.CreateParameter();
                     dbParameter.ParameterName = item.Key;
                     dbParameter.Value = item.Value ?? DBNull.Value;
+                    cmd.Parameters.Add(dbParameter);
+                }
+            }
+            else if (listParameters != null)
+            {
+                foreach (var item in listParameters)
+                {
+                    DbParameter dbParameter = cmd.CreateParameter();
+                    dbParameter.ParameterName = item.Name;
+                    dbParameter.Value = item.Value ?? DBNull.Value;
+                    if (item.IsEnableOutPut)
+                    {
+                        dbParameter.Direction = ParameterDirection.Output;
+                    }
                     cmd.Parameters.Add(dbParameter);
                 }
             }
@@ -306,6 +340,7 @@ WHERE temp.aaaaa BETWEEN {2} AND {3}", string.IsNullOrEmpty(order) ? OrderBy : o
             try
             {
                 cmd.Connection.Open();
+
                 DbDataReader reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -330,6 +365,61 @@ WHERE temp.aaaaa BETWEEN {2} AND {3}", string.IsNullOrEmpty(order) ? OrderBy : o
             return list;
         }
 
+        public IList<T> GetList<T>(EntityConverter<T> converter, DbCommand cmd, Dictionary<string, object> dicParameters, List<DbParameterInfo> listParameters) where T : class, new()
+        {
+            IList<T> list = new List<T>();
+            try
+            {
+                cmd.Connection.Open();
+
+                DbDataReader reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    T obj = new T();
+                    converter(reader, obj);
+                    list.Add(obj);
+                }
+                reader.Close();
+                reader.Dispose();
+            }
+            catch (Exception ex)
+            {
+                LogHelper.CmdError(ex, cmd);
+                throw ex;
+            }
+            finally
+            {
+                if (cmd.Parameters != null)
+                {
+                    if (dicParameters != null)
+                    {
+                        foreach (DbParameter item in cmd.Parameters)
+                        {
+                            if (dicParameters.ContainsKey(item.ParameterName))
+                            {
+                                dicParameters[item.ParameterName] = item.Value;
+                            }
+                        }
+                    }
+                    else if (listParameters != null)
+                    {
+                        foreach (DbParameter item in cmd.Parameters)
+                        {
+                            var para = listParameters.FirstOrDefault(t => t.Name.Equals(item.ParameterName));
+                            if (para != null)
+                            {
+                                para.Value = item.Value;
+                            }
+                        }
+                    }
+                }
+                cmd.Connection.Close();
+                cmd.Connection.Dispose();
+                cmd.Dispose();
+            }
+            return list;
+        }
+
         /// <summary>
         /// 执行返回实体列表
         /// </summary>
@@ -337,10 +427,28 @@ WHERE temp.aaaaa BETWEEN {2} AND {3}", string.IsNullOrEmpty(order) ? OrderBy : o
         /// <param name="converter"></param>
         /// <param name="cmdText">命令文本</param>
         /// <returns>实体列表</returns>
-        public IList<T> GetList<T>(EntityConverter<T> converter, String cmdText, Dictionary<String, Object> parameters = null, CommandType commandType = CommandType.Text) where T : class, new()
+        public IList<T> GetList<T>(
+            EntityConverter<T> converter,
+            String cmdText,
+            Dictionary<String, Object> parameters = null,
+            CommandType commandType = CommandType.Text
+            ) where T : class, new()
         {
-            DbCommand cmd = CreateCommand(commandType, cmdText, parameters);
-            return GetList<T>(converter, cmd);
+            DbCommand cmd = CreateCommand(commandType, cmdText, parameters, null);
+            //GetList
+            return GetList<T>(converter, cmd, parameters, null);
+        }
+
+        public IList<T> GetList<T>(
+            EntityConverter<T> converter,
+            String cmdText,
+           List<DbParameterInfo> parameters = null,
+            CommandType commandType = CommandType.Text
+            ) where T : class, new()
+        {
+            DbCommand cmd = CreateCommand(commandType, cmdText, null, parameters);
+            //GetList
+            return GetList<T>(converter, cmd, null, parameters);
         }
 
         #endregion GetList
